@@ -40,8 +40,7 @@ GEOJSON_PROPERTIES = [
     'tractNumber',
     'farmNumber',
     'fieldNumber',
-    'legalDescription',
-    'centroid'
+    'legalDescription'
 ]
 
 
@@ -182,11 +181,25 @@ def process_chunk_to_features(df_chunk, columns):
     df_chunk.columns = columns
 
     for idx, row in df_chunk.iterrows():
-        geometry = wkt_to_geojson_geometry(row['Shape'])
-        if geometry is None:
+        multipolygon_geometry = wkt_to_geojson_geometry(row['Shape'])
+        if multipolygon_geometry is None:
             continue 
 
         centroid = calculate_centroid(row["Shape"])
+
+        # Create GeometryCollection with MultiPolygon and Point (centroid)
+        geometries = [multipolygon_geometry]
+        
+        if centroid is not None:
+            geometries.append({
+                'type': 'Point',
+                'coordinates': centroid
+            })
+        
+        geometry_collection = {
+            'type': 'GeometryCollection',
+            'geometries': geometries
+        }
 
         properties = {
             'cluIdentifier': row['clu_identifier'] if not is_null_value(row['clu_identifier']) else None,
@@ -201,14 +214,13 @@ def process_chunk_to_features(df_chunk, columns):
                 row['TownshipDirection'],
                 row['RangeNumber'],
                 row['RangeDirection']
-            ),
-            'centroid': centroid
+            )
         }
 
         feature = {
             'type': 'Feature',
             'properties': properties,
-            'geometry': geometry
+            'geometry': geometry_collection
         }
 
         yield feature
