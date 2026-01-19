@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 import time
 import io
+import argparse
 
 load_dotenv()
 
@@ -21,7 +22,6 @@ if sys.platform == 'win32':
 
 PROFILE_NAME = "brisk-mapbox"
 TOKEN = os.getenv('MAPBOX_SECRET_KEY')
-BASE_DIR = Path(__file__).parent
 
 def find_tilesets_command():
     """Find the tilesets command, checking for installed executables."""
@@ -196,21 +196,34 @@ def process_folder(folder_path, folder_name):
     print(f"\n✅ Successfully processed {folder_name}!")
     return True
 
-def main():
+def main(base_dir):
     """
     Main function to process all folders in the directory.
+    
+    Args:
+        base_dir: Path to the directory containing folders with GeoJSON and recipe files
     """
+    base_path = Path(base_dir).resolve()
+    
+    if not base_path.exists():
+        print(f"❌ Error: Directory does not exist: {base_path}")
+        sys.exit(1)
+    
+    if not base_path.is_dir():
+        print(f"❌ Error: Path is not a directory: {base_path}")
+        sys.exit(1)
+    
     print("="*60)
     print("  Mapbox Tileset Automation Script")
     print("="*60)
     print(f"Profile: {PROFILE_NAME}")
-    print(f"Base directory: {BASE_DIR}")
+    print(f"Base directory: {base_path}")
     print("="*60)
 
     print(f"🔍 Scanning directory for folders to process...")
     folders_to_process = []
 
-    for item in BASE_DIR.iterdir():
+    for item in base_path.iterdir():
         if item.is_dir() and not item.name.startswith('.'):
             recipe_exists = (item / "recipe.json").exists()
             geojson_exists = any(item.glob("*.geojson"))
@@ -279,8 +292,20 @@ def main():
     print("="*60)
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description='Mapbox Tileset Automation - Process folders with GeoJSON and recipe files'
+    )
+    parser.add_argument(
+        'base_dir',
+        nargs='?',
+        default='.',
+        help='Directory containing folders with GeoJSON and recipe.json files (default: current directory)'
+    )
+    
+    args = parser.parse_args()
+    
     try:
-        main()
+        main(args.base_dir)
     except KeyboardInterrupt:
         print("\n\n❌ Script interrupted by user.")
         sys.exit(1)
