@@ -34,6 +34,8 @@ STATE_FIPS_MAPPING = {
 }
 
 GEOJSON_PROPERTIES = [
+    'id',
+    'role',
     'cluIdentifier',
     'area',
     'cluCalculatedAcreage',
@@ -187,21 +189,12 @@ def process_chunk_to_features(df_chunk, columns):
 
         centroid = calculate_centroid(row["Shape"])
 
-        # Create GeometryCollection with MultiPolygon and Point (centroid)
-        geometries = [multipolygon_geometry]
-        
-        if centroid is not None:
-            geometries.append({
-                'type': 'Point',
-                'coordinates': centroid
-            })
-        
-        geometry_collection = {
-            'type': 'GeometryCollection',
-            'geometries': geometries
-        }
+        # Use clu_identifier as the common ID, or generate one if not available
+        feature_id = row['clu_identifier'] if not is_null_value(row['clu_identifier']) else f"feature-{idx}"
 
-        properties = {
+        # Base properties shared by both features
+        base_properties = {
+            'id': feature_id,
             'cluIdentifier': row['clu_identifier'] if not is_null_value(row['clu_identifier']) else None,
             'area': convert_to_float(row['clu_calculated_acreage']),
             'cluCalculatedAcreage': convert_to_float(row['clu_calculated_acreage']),
@@ -217,13 +210,33 @@ def process_chunk_to_features(df_chunk, columns):
             )
         }
 
-        feature = {
+        # First feature: MultiPolygon
+        polygon_properties = base_properties.copy()
+        polygon_properties['role'] = 'polygon'
+        
+        polygon_feature = {
             'type': 'Feature',
-            'properties': properties,
-            'geometry': geometry_collection
+            'properties': polygon_properties,
+            'geometry': multipolygon_geometry
         }
 
-        yield feature
+        yield polygon_feature
+
+        # Second feature: Centroid Point (only if centroid is valid)
+        if centroid is not None:
+            centroid_properties = base_properties.copy()
+            centroid_properties['role'] = 'centroid'
+            
+            centroid_feature = {
+                'type': 'Feature',
+                'properties': centroid_properties,
+                'geometry': {
+                    'type': 'Point',
+                    'coordinates': centroid
+                }
+            }
+
+            yield centroid_feature
 
 
 def write_geojson_streaming(output_path, state_name, feature_generator, max_rows=None):
