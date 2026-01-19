@@ -214,9 +214,15 @@ def process_chunk_to_features(df_chunk, columns):
         yield feature
 
 
-def write_geojson_streaming(output_path, state_name, feature_generator):
+def write_geojson_streaming(output_path, state_name, feature_generator, max_rows=None):
     """
     Write GeoJSON file incrementally to minimize memory usage
+    
+    Args:
+        output_path: Path to output GeoJSON file
+        state_name: Name of the state
+        feature_generator: Generator yielding features
+        max_rows: Maximum number of features to write (None for unlimited)
     """
     with open(output_path, 'w', encoding='utf-8') as f:
         # Write header
@@ -235,6 +241,10 @@ def write_geojson_streaming(output_path, state_name, feature_generator):
                 f.write(',\n')
             json.dump(feature, f, indent=4)
             feature_count += 1
+            
+            # Stop if max_rows limit is reached
+            if max_rows is not None and feature_count >= max_rows:
+                break
 
         f.write('\n  ]\n')
         f.write('}\n')
@@ -242,7 +252,7 @@ def write_geojson_streaming(output_path, state_name, feature_generator):
     return feature_count
 
 
-def process_single_file(file_path, output_base_dir, chunk_size=10000):
+def process_single_file(file_path, output_base_dir, chunk_size=10000, max_rows=None):
     try:
         filename = os.path.basename(file_path)
         print(f"\nProcessing: {filename}")
@@ -256,6 +266,8 @@ def process_single_file(file_path, output_base_dir, chunk_size=10000):
             return (state_name, None, False, f"No FIPS code found for state: {state_name}")
 
         print(f"  State: {state_name}, FIPS: {fips_code}")
+        if max_rows is not None:
+            print(f"  Max rows limit: {max_rows}")
 
         columns = [
             'objectid', 'Shape', 'clu_identifier', 'clu_number', 'tract_number',
@@ -282,9 +294,11 @@ def process_single_file(file_path, output_base_dir, chunk_size=10000):
         print(f"  Creating GeoJSON features (streaming)...")
 
         geojson_path = os.path.join(output_dir, f"{fips_code}.geojson")
-        feature_count = write_geojson_streaming(geojson_path, state_name, feature_generator())
+        feature_count = write_geojson_streaming(geojson_path, state_name, feature_generator(), max_rows=max_rows)
 
         print(f"  Created {feature_count} features")
+        if max_rows is not None and feature_count >= max_rows:
+            print(f"  ⚠️  Reached max row limit of {max_rows}")
         print(f"  Saved: {geojson_path}")
 
         recipe = {
@@ -316,7 +330,7 @@ def process_single_file(file_path, output_base_dir, chunk_size=10000):
         return (filename, None, False, error_msg)
 
 
-def process_directory(input_dir, output_dir, max_workers=4, chunk_size=10000):
+def process_directory(input_dir, output_dir, max_workers=4, chunk_size=10000, max_rows=None):
     """
     Process all .txt files in input directory using multi-threading
 
@@ -325,12 +339,15 @@ def process_directory(input_dir, output_dir, max_workers=4, chunk_size=10000):
         output_dir: Base directory for output folders
         max_workers: Number of parallel threads
         chunk_size: Number of rows to process at a time per file
+        max_rows: Maximum number of features per output file (None for unlimited)
     """
     print(f"\nStarting batch processing...")
     print(f"Input directory: {input_dir}")
     print(f"Output directory: {output_dir}")
     print(f"Max workers: {max_workers}")
     print(f"Chunk size: {chunk_size} rows")
+    if max_rows is not None:
+        print(f"Max rows per file: {max_rows} features")
 
     input_path = Path(input_dir)
     txt_files = list(input_path.glob("clu*_*_STR.txt"))
@@ -347,7 +364,7 @@ def process_directory(input_dir, output_dir, max_workers=4, chunk_size=10000):
     results = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_file = {
-            executor.submit(process_single_file, str(file_path), output_dir, chunk_size): file_path
+            executor.submit(process_single_file, str(file_path), output_dir, chunk_size, max_rows): file_path
             for file_path in txt_files
         }
 
@@ -396,11 +413,13 @@ def main():
                        help='Number of parallel workers (default: 2, lowered for memory efficiency)')
     parser.add_argument('--chunk-size', '-c', type=int, default=10000,
                        help='Number of rows to process at a time per file (default: 10000)')
+    parser.add_argument('--max-rows', '-m', type=int, default=None,
+                       help='Maximum number of features to output per file (default: unlimited)')
 
     args = parser.parse_args()
 
     process_directory(args.input_dir, args.output,
-                     max_workers=args.workers, chunk_size=args.chunk_size)
+                     max_workers=args.workers, chunk_size=args.chunk_size, max_rows=args.max_rows)
 
 
 if __name__ == "__main__":
