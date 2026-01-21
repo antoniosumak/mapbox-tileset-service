@@ -5,7 +5,6 @@ Mapbox Tileset Automation Script
 This script processes folders containing GeoJSON files and recipe.json files,
 then executes Mapbox tileset commands to add sources, create tilesets, and publish them.
 """
-from dotenv import load_dotenv
 import os
 import subprocess
 import sys
@@ -13,15 +12,23 @@ from pathlib import Path
 import time
 import io
 import argparse
+import json
+import ijson
+from decimal import Decimal
 
-load_dotenv()
+class DecimalEncoder(json.JSONEncoder):
+    """JSON encoder that handles Decimal objects from ijson."""
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super().default(obj)
 
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 PROFILE_NAME = "brisk-mapbox"
-TOKEN = os.getenv('MAPBOX_SECRET_KEY')
+TOKEN = "YOUR_MAPBOX_TOKEN_HERE"
 
 def find_tilesets_command():
     """Find the tilesets command, checking for installed executables."""
@@ -41,6 +48,39 @@ def find_tilesets_command():
     return 'tilesets'
 
 TILESETS_CMD = find_tilesets_command()
+
+def convert_geojson_to_ldgeojson_streaming(input_path, output_path):
+    """
+    Convert a GeoJSON file to line-delimited GeoJSON using streaming.
+    This avoids loading the entire file into memory.
+
+    Args:
+        input_path (Path): Path to the input GeoJSON file
+        output_path (Path): Path to the output line-delimited GeoJSON file
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+
+    print(f"🔄 Converting {input_path.name} to line-delimited format (streaming)...")
+    sys.stdout.flush()
+
+    try:
+        feature_count = 0
+        with open(input_path, 'rb') as infile, open(output_path, 'w', encoding='utf-8') as outfile:
+            features = ijson.items(infile, 'features.item')
+            for feature in features:
+                outfile.write(json.dumps(feature, ensure_ascii=False, cls=DecimalEncoder) + '\n')
+                feature_count += 1
+                if feature_count % 10000 == 0:
+                    print(f"   Processed {feature_count} features...")
+                    sys.stdout.flush()
+
+        print(f"✅ Converted {feature_count} features to line-delimited format")
+        return True
+    except Exception as e:
+        print(f"❌ Error converting file: {str(e)}")
+        return False
 
 def run_command(command, description):
     """
@@ -150,51 +190,67 @@ def process_folder(folder_path, folder_name):
     print(f"   - Tileset name: {tileset_name}")
     sys.stdout.flush()
 
-    add_source_cmd = [
-        TILESETS_CMD, "add-source",
-        PROFILE_NAME,
-        source_name,
-        str(geojson_path),
-        "--token", TOKEN,
-        "--no-validation"
-    ]
-
-    if not run_command(add_source_cmd, f"Step 1/3: Adding source '{source_name}'"):
-        print(f"❌ Failed to add source for {folder_name}")
+    # Convert GeoJSON to line-delimited format to avoid memory issues
+    ldgeojson_path = folder_path / f"{geojson_path.stem}.ldgeojson"
+    if not convert_geojson_to_ldgeojson_streaming(geojson_path, ldgeojson_path):
+        print(f"❌ Failed to convert GeoJSON for {folder_name}")
         return False
 
-    print(f"⏸️  Waiting 1 second before next step...")
-    sys.stdout.flush()
-    time.sleep(1)
+    try:
+        add_source_cmd = [
+            TILESETS_CMD, "add-source",
+            PROFILE_NAME,
+            source_name,
+            str(ldgeojson_path),
+            "--token", TOKEN,
+            "--no-validation"
+        ]
 
-    create_tileset_cmd = [
-        TILESETS_CMD, "create",
-        tile_id,
-        "--recipe", str(recipe_path),
-        "--name", tileset_name,
-        "--token", TOKEN
-    ]
+        if not run_command(add_source_cmd, f"Step 1/3: Adding source '{source_name}'"):
+            print(f"❌ Failed to add source for {folder_name}")
+            return False
 
-    if not run_command(create_tileset_cmd, f"Step 2/3: Creating tileset '{tile_id}'"):
-        print(f"❌ Failed to create tileset for {folder_name}")
-        return False
+        print(f"⏸️  Waiting 1 second before next step...")
+        sys.stdout.flush()
+        time.sleep(1)
 
-    print(f"⏸️  Waiting 1 second before next step...")
-    sys.stdout.flush()
-    time.sleep(1)
+        create_tileset_cmd = [
+            TILESETS_CMD, "create",
+            tile_id,
+            "--recipe", str(recipe_path),
+            "--name", tileset_name,
+            "--token", TOKEN
+        ]
 
-    publish_tileset_cmd = [
-        TILESETS_CMD, "publish",
-        tile_id,
-        "--token", TOKEN
-    ]
+        if not run_command(create_tileset_cmd, f"Step 2/3: Creating tileset '{tile_id}'"):
+            print(f"❌ Failed to create tileset for {folder_name}")
+            return False
 
-    if not run_command(publish_tileset_cmd, f"Step 3/3: Publishing tileset '{tile_id}'"):
-        print(f"❌ Failed to publish tileset for {folder_name}")
-        return False
+        print(f"⏸️  Waiting 1 second before next step...")
+        sys.stdout.flush()
+        time.sleep(1)
 
-    print(f"\n✅ Successfully processed {folder_name}!")
-    return True
+        publish_tileset_cmd = [
+            TILESETS_CMD, "publish",
+            tile_id,
+            "--token", TOKEN
+        ]
+
+        if not run_command(publish_tileset_cmd, f"Step 3/3: Publishing tileset '{tile_id}'"):
+            print(f"❌ Failed to publish tileset for {folder_name}")
+            return False
+
+        print(f"\n✅ Successfully processed {folder_name}!")
+        return True
+
+    finally:
+        # Clean up temporary line-delimited file
+        if ldgeojson_path.exists():
+            try:
+                ldgeojson_path.unlink()
+                print(f"🧹 Cleaned up temporary file: {ldgeojson_path.name}")
+            except Exception as e:
+                print(f"⚠️  Could not delete temp file {ldgeojson_path.name}: {e}")
 
 def main(base_dir):
     """

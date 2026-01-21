@@ -4,3 +4,4 @@ shapely>=2.0.0
 
 mapbox-tilesets>=1.7.0
 
+ijson>=3.2.0
